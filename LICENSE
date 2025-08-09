@@ -1,0 +1,69 @@
+MIT License
+
+Copyright (c) 2024 TDOA Geolocation Project Contributors
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+## Third-Party Components
+
+This project incorporates or depends upon the following third-party software:
+
+### librtlsdr-2freq
+- **License:** GNU General Public License v2.0
+- **Author:** DC9ST (Stefan Scholl)
+- **Source:** https://github.com/DC9ST/librtlsdr-2freq
+- **Description:** Modified librtlsdr for dual-frequency RTL-SDR operation
+- **Usage:** Binary execution for data collection
+
+### Go Standard Library
+- **License:** BSD-style License
+- **Copyright:** The Go Authors
+- **Source:** https://golang.org/
+- **Description:** Go programming language standard library
+
+## Patent Notice
+
+This software implements Time Difference of Arrival (TDOA) techniques for RF 
+geolocation. Users should be aware that various patents may exist covering 
+TDOA methods and implementations. This software is provided for amateur radio 
+experimentation and research purposes. Commercial use may require additional 
+patent licensing.
+
+## Export Control Notice
+
+This software may be subject to export control laws and regulations. Users 
+are responsible for complying with all applicable export control requirements 
+in their jurisdiction.
+
+## Amateur Radio Notice
+
+This software is designed for amateur radio experimentation and research. 
+Users must comply with:
+
+- Local amateur radio licensing requirements
+- RF monitoring and geolocation regulations  
+- Privacy and communications laws
+- International telecommunications agreements
+
+## Disclaimer
+
+THE SOFTWARE IS PROVIDED FOR AMATEUR RADIO AND RESEARCH PURPOSES ONLY. THE 
+AUTHORS DISCLAIM ANY RESPONSIBILITY FOR MISUSE OF THIS SOFTWARE OR VIOLATION 
+OF ANY LAWS OR REGULATIONS. USERS ARE SOLELY RESPONSIBLE FOR ENSURING THEIR 
+USE COMPLIES WITH ALL APPLICABLE LEGAL REQUIREMENTS.

@@ -1,0 +1,75 @@
+# Binaries
+collector
+reader
+*.exe
+*.dll
+*.so
+*.dylib
+
+# Data files
+*.dat
+*.bin
+*.raw
+
+# Go build artifacts
+*.test
+*.prof
+go.mod
+go.sum
+
+# IDE and editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS generated files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# RTL-SDR build artifacts
+librtlsdr-2freq/
+rtl-sdr/
+
+# Log files
+*.log
+*.out
+
+# Temporary files
+temp/
+tmp/
+*.tmp
+
+# Collection archives
+collections/
+*.tar.gz
+*.zip
+
+# Local configuration
+config.local
+.env.local
+
+# Python cache (if we add Python tools later)
+__pycache__/
+*.pyc
+*.pyo
+
+# Jupyter notebooks (if we add analysis notebooks)
+.ipynb_checkpoints/
+
+# Documentation build
+docs/_build/
+docs/.doctrees/
+
+# Test coverage
+coverage.out
+coverage.html
+
+# KX0U
+*.txt
