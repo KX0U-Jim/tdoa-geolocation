@@ -13,12 +13,14 @@ import (
 func main() {
 	// Parse flags
 	duration := flag.Int("duration", 30, "Collection duration in seconds (max 100)")
+	gain := flag.Float64("gain", 0, "RTL-SDR gain in dB (0 = auto gain)")
 	flag.Parse()
 
 	args := flag.Args()
 	if len(args) < 4 {
-		fmt.Printf("Usage: %s [--duration=seconds] <reference_freq_hz> <target_freq_hz> <start_epoch_seconds> <station_id>\n", os.Args[0])
-		fmt.Printf("Example: %s --duration=60 96900000 162550000 1723234567 kx0u\n", os.Args[0])
+		fmt.Printf("Usage: %s [--duration=seconds] [--gain=dB] <reference_freq_hz> <target_freq_hz> <start_epoch_seconds> <station_id>\n", os.Args[0])
+		fmt.Printf("Example: %s --duration=60 --gain=49.6 96900000 162550000 1723234567 kx0u\n", os.Args[0])
+		fmt.Printf("Gain: 0 = auto gain, or specify dB value (e.g., 49.6)\n")
 		fmt.Printf("Output: [station_id]-[start_epoch].dat\n")
 		os.Exit(1)
 	}
@@ -60,6 +62,11 @@ func main() {
 	fmt.Printf("Target: %d Hz\n", targetFreq)
 	fmt.Printf("Start: %s\n", time.Unix(startTime, 0))
 	fmt.Printf("Duration: %d seconds\n", *duration)
+	fmt.Printf("Gain: %.1f dB", *gain)
+	if *gain == 0 {
+		fmt.Printf(" (auto)")
+	}
+	fmt.Printf("\n")
 	fmt.Printf("Station: %s\n", stationID)
 	fmt.Printf("Output: %s\n", filename)
 
@@ -111,6 +118,7 @@ func main() {
 		"-f", fmt.Sprintf("%d", refFreq),
 		"-h", fmt.Sprintf("%d", targetFreq), 
 		"-s", fmt.Sprintf("%d", sampleRate),
+		"-g", fmt.Sprintf("%.1f", *gain),
 		"-n", fmt.Sprintf("%d", samplesPerFreq),
 		filename,
 	}

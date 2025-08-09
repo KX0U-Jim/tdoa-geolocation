@@ -1,15 +1,15 @@
 # TDOA Geolocation System
 
-A Time Difference of Arrival (TDOA) geolocation system using RTL-SDR receivers with innovative FM audio pattern matching for reference signal synchronization.
+A Time Difference of Arrival (TDOA) geolocation system using RTL-SDR receivers with FM audio demodulation to aid correlation
 
 ## Overview
 
-This project implements a distributed TDOA system that can locate FM transmitters using multiple RTL-SDR collector stations synchronized via reference signals. The key innovation is using **pre-recorded FM audio content to predict and match RF patterns** for precise timing synchronization - eliminating the need for expensive GPS disciplined oscillators.
+This project implements a distributed TDOA system that can locate FM transmitters using multiple RTL-SDR collector stations synchronized via reference signals. The new wrinkle (at least for our team) is demodulating FM signals in targets and reference signals during processing to aid correlation.
 
 ### Key Features
 
 - **Seamless frequency switching** using librtlsdr-2freq (zero sample loss)
-- **Innovative FM audio pattern matching** for reference signal correlation
+- **FM audio demodulation and FFT** for reference signal correlation
 - **Distributed collector architecture** supporting RTL-SDR V4/V5 with TCXO
 - **Precise timing synchronization** without GPS disciplined oscillators
 - **Comprehensive data validation** tools for quality assurance
@@ -24,17 +24,6 @@ Reference Signal (FM Station) ←→ Target Signal (FM/NBFM)
          ↓                              ↓
     Audio Pattern Matching → Cross-Correlation → Trilateration
 ```
-
-### The FM Audio Pattern Innovation
-
-Traditional TDOA systems struggle with FM broadcast signals due to unpredictable modulation. This project solves that by:
-
-1. **Pre-recording** FM audio content from the reference station
-2. **Predicting** what the modulated RF signal should look like using FFT analysis
-3. **Cross-correlating** predicted patterns against received RF samples
-4. **Extracting** precise timing differences between collector stations
-
-This approach transforms the "problem" of complex FM modulation into the "solution" - those complex patterns become unique correlation fingerprints.
 
 ## Hardware Requirements
 
@@ -81,6 +70,9 @@ start_time=$(($(date +%s) + 30))
 Run the same command simultaneously on all three collectors, each with their unique station ID (kx0u, n3pay, kf0mtl).
 
 ## Project Status
+
+## Project in initial state of turbulent flux
+## Probably best to ignore the following for now
 
 **Current Implementation:**
 - ✅ Dual-frequency RTL-SDR data collection with zero sample loss
