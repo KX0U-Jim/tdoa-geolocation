@@ -3,7 +3,9 @@ package main
 import (
 	"fmt"
 	"math"
+	"math/cmplx"
 	"os"
+	"sort"
 	"strconv"
 )
 
@@ -59,42 +61,73 @@ func main() {
 	fmt.Printf("File: %s\n", filename)
 	fmt.Printf("Expected Duration: %d seconds\n\n", expectedDuration)
 
-	// Perform analysis
-	analysis, err := analyzeSignalQuality(filename, expectedDuration)
+	// Perform separate analysis for reference and target signals
+	refAnalysis, targetAnalysis, err := analyzeDualFrequencyFile(filename, expectedDuration)
 	if err != nil {
 		fmt.Printf("Error analyzing file: %v\n", err)
 		os.Exit(1)
 	}
 
 	// Print analysis results
-	printAnalysisResults(analysis)
+	fmt.Printf("=== REFERENCE SIGNAL ANALYSIS ===\n")
+	printAnalysisResults(refAnalysis)
+	generateRecommendations(refAnalysis, filename, "Reference")
 	
-	// Generate recommendations
-	generateRecommendations(analysis, filename)
+	fmt.Printf("\n=== TARGET SIGNAL ANALYSIS ===\n")
+	printAnalysisResults(targetAnalysis)
+	generateRecommendations(targetAnalysis, filename, "Target")
+	
+	// Compare signals
+	compareSignals(refAnalysis, targetAnalysis)
 }
 
-func analyzeSignalQuality(filename string, expectedDuration int) (*SignalAnalysis, error) {
+func analyzeDualFrequencyFile(filename string, expectedDuration int) (*SignalAnalysis, *SignalAnalysis, error) {
 	file, err := os.Open(filename)
 	if err != nil {
-		return nil, fmt.Errorf("failed to open file: %v", err)
+		return nil, nil, fmt.Errorf("failed to open file: %v", err)
 	}
 	defer file.Close()
 
 	fileInfo, err := file.Stat()
 	if err != nil {
-		return nil, fmt.Errorf("failed to get file info: %v", err)
+		return nil, nil, fmt.Errorf("failed to get file info: %v", err)
 	}
 
 	totalBytes := fileInfo.Size()
 	totalSamples := int(totalBytes / bytesPerSample)
 
-	// Read all samples for comprehensive analysis
+	// Read all samples
 	samples := make([]byte, totalBytes)
 	_, err = file.Read(samples)
 	if err != nil {
-		return nil, fmt.Errorf("failed to read samples: %v", err)
+		return nil, nil, fmt.Errorf("failed to read samples: %v", err)
 	}
 
+	// librtlsdr-2freq pattern: 3×n samples (freq1, freq2, freq1)
+	samplesPerBlock := totalSamples / 3
+	
+	fmt.Printf("=== File Structure Analysis ===\n")
+	fmt.Printf("Total samples: %d\n", totalSamples)
+	fmt.Printf("Samples per frequency block: %d\n", samplesPerBlock)
+	fmt.Printf("Reference samples: %d (blocks 1+3)\n", samplesPerBlock*2)
+	fmt.Printf("Target samples: %d (block 2)\n\n", samplesPerBlock)
+
+	// Extract reference signal samples (blocks 1 and 3)
+	refSamples := make([]byte, samplesPerBlock*2*bytesPerSample)
+	copy(refSamples[0:samplesPerBlock*bytesPerSample], samples[0:samplesPerBlock*bytesPerSample])
+	copy(refSamples[samplesPerBlock*bytesPerSample:], samples[samplesPerBlock*2*bytesPerSample:])
+
+	// Extract target signal samples (block 2)
+	targetSamples := samples[samplesPerBlock*bytesPerSample : samplesPerBlock*2*bytesPerSample]
+
+	// Analyze both signals
+	refAnalysis := analyzeSamples(refSamples, samplesPerBlock*2, "Reference")
+	targetAnalysis := analyzeSamples(targetSamples, samplesPerBlock, "Target")
+
+	return refAnalysis, targetAnalysis, nil
+}
+
+func analyzeSamples(samples []byte, totalSamples int, signalType string) *SignalAnalysis {
 	analysis := &SignalAnalysis{
 		TotalSamples: totalSamples,
 		IMin: 255, IMax: 0,
@@ -149,18 +182,14 @@ func analyzeSignalQuality(filename string, expectedDuration int) (*SignalAnalysi
 	
 	analysis.HasNoise = analysis.IStdDev > 60 || analysis.QStdDev > 60 // Excessive variation
 
-	// Estimate SNR (crude approximation)
-	signalPower := analysis.IStdDev*analysis.IStdDev + analysis.QStdDev*analysis.QStdDev
-	noisePower := estimateNoisePower(samples, totalSamples)
-	if noisePower > 0 {
-		analysis.SNREstimate = 10 * math.Log10(signalPower / noisePower)
-	}
+	// Calculate proper SNR using FFT-based frequency domain analysis
+	analysis.SNREstimate = calculateProperSNR(samples, totalSamples)
 
 	// Spectral analysis (simplified)
 	analysis.PeakFrequency, analysis.BandwidthUsed, analysis.SpectralPurity = 
 		analyzeSpectrum(samples, totalSamples)
 
-	return analysis, nil
+	return analysis
 }
 
 func checkForDeadZones(samples []byte, totalSamples int) bool {
@@ -181,20 +210,130 @@ func checkForDeadZones(samples []byte, totalSamples int) bool {
 	return maxZeros > 1000 // More than 1000 consecutive zero samples
 }
 
-func estimateNoisePower(samples []byte, totalSamples int) float64 {
-	// Simple noise estimation: look at high-frequency variations
-	if totalSamples < 1000 {
-		return 1.0
+func calculateProperSNR(samples []byte, totalSamples int) float64 {
+	// Use a reasonable sample size for analysis (max 16384 samples = 8ms at 2Msps)
+	analysisSize := 16384
+	if totalSamples < analysisSize {
+		analysisSize = totalSamples
 	}
 	
-	var diffSum float64
-	for i := 1; i < totalSamples; i++ {
-		iDiff := float64(samples[i*2]) - float64(samples[(i-1)*2])
-		qDiff := float64(samples[i*2+1]) - float64(samples[(i-1)*2+1])
-		diffSum += iDiff*iDiff + qDiff*qDiff
+	// Take samples from middle of capture to avoid startup transients
+	startIdx := (totalSamples - analysisSize) / 2
+	analysisBytes := samples[startIdx*2 : (startIdx+analysisSize)*2]
+	
+	// Convert samples to complex numbers with DC offset and IQ correction
+	complexSamples := preprocessSamples(analysisBytes, analysisSize)
+	
+	// Apply Blackman-Harris window to reduce spectral leakage
+	windowed := applyBlackmanHarrisWindow(complexSamples)
+	
+	// Compute FFT using DFT 
+	fft := computeDFT(windowed)
+	
+	// Compute power spectral density
+	psd := make([]float64, len(fft))
+	for i, c := range fft {
+		psd[i] = cmplx.Abs(c) * cmplx.Abs(c)
 	}
 	
-	return diffSum / float64(totalSamples-1)
+	// Use Welch's method approach: separate signal from noise
+	// Sort PSD values to find percentile thresholds
+	sortedPSD := make([]float64, len(psd))
+	copy(sortedPSD, psd)
+	sort.Float64s(sortedPSD)
+	
+	// Signal power: top 10% of spectral bins (where signal energy concentrates)
+	signalThresholdIdx := int(0.9 * float64(len(sortedPSD)))
+	signalPower := 0.0
+	signalBins := 0
+	for _, power := range psd {
+		if power >= sortedPSD[signalThresholdIdx] {
+			signalPower += power
+			signalBins++
+		}
+	}
+	if signalBins > 0 {
+		signalPower /= float64(signalBins)
+	}
+	
+	// Noise power: bottom 50% of spectral bins (noise floor)
+	noiseEndIdx := int(0.5 * float64(len(sortedPSD)))
+	noisePower := 0.0
+	for i := 0; i < noiseEndIdx; i++ {
+		noisePower += sortedPSD[i]
+	}
+	noisePower /= float64(noiseEndIdx)
+	
+	// Calculate SNR in dB
+	if noisePower > 0 && signalPower > noisePower {
+		return 10 * math.Log10(signalPower/noisePower)
+	}
+	
+	// Fallback for edge cases
+	return -20.0
+}
+
+func preprocessSamples(samples []byte, totalSamples int) []complex128 {
+	// Convert uint8 samples to complex128 with DC offset correction
+	complexSamples := make([]complex128, totalSamples)
+	
+	// First pass: calculate DC offset
+	var iSum, qSum float64
+	for i := 0; i < totalSamples; i++ {
+		iSum += float64(samples[i*2])
+		qSum += float64(samples[i*2+1])
+	}
+	iDC := iSum / float64(totalSamples)
+	qDC := qSum / float64(totalSamples)
+	
+	// Second pass: apply DC correction and convert to complex
+	for i := 0; i < totalSamples; i++ {
+		// Convert from uint8 [0,255] to float64 [-1,1] with DC correction
+		iVal := (float64(samples[i*2]) - iDC) / 127.5
+		qVal := (float64(samples[i*2+1]) - qDC) / 127.5
+		complexSamples[i] = complex(iVal, qVal)
+	}
+	
+	return complexSamples
+}
+
+func applyBlackmanHarrisWindow(samples []complex128) []complex128 {
+	// Apply Blackman-Harris window for better spectral analysis
+	n := len(samples)
+	windowed := make([]complex128, n)
+	
+	for i := 0; i < n; i++ {
+		// Blackman-Harris coefficients
+		a0 := 0.35875
+		a1 := 0.48829
+		a2 := 0.14128
+		a3 := 0.01168
+		
+		w := a0 - a1*math.Cos(2*math.Pi*float64(i)/float64(n-1)) +
+			 a2*math.Cos(4*math.Pi*float64(i)/float64(n-1)) -
+			 a3*math.Cos(6*math.Pi*float64(i)/float64(n-1))
+		
+		windowed[i] = complex(w, 0) * samples[i]
+	}
+	
+	return windowed
+}
+
+func computeDFT(samples []complex128) []complex128 {
+	// Simple DFT implementation (not optimized FFT, but correct)
+	n := len(samples)
+	dft := make([]complex128, n)
+	
+	for k := 0; k < n; k++ {
+		sum := complex(0, 0)
+		for i := 0; i < n; i++ {
+			angle := -2 * math.Pi * float64(k) * float64(i) / float64(n)
+			sum += samples[i] * complex(math.Cos(angle), math.Sin(angle))
+		}
+		dft[k] = sum
+	}
+	
+	return dft
 }
 
 func analyzeSpectrum(samples []byte, totalSamples int) (peakFreq, bandwidth, purity float64) {
@@ -237,8 +376,8 @@ func printFlag(name string, condition bool, failIcon, passIcon string) {
 	}
 }
 
-func generateRecommendations(analysis *SignalAnalysis, filename string) {
-	fmt.Printf("\n=== RECOMMENDATIONS ===\n")
+func generateRecommendations(analysis *SignalAnalysis, filename string, signalType string) {
+	fmt.Printf("\n=== %s SIGNAL RECOMMENDATIONS ===\n", signalType)
 	
 	// Gain recommendations
 	generateGainRecommendations(analysis)
@@ -254,6 +393,81 @@ func generateRecommendations(analysis *SignalAnalysis, filename string) {
 	
 	// Future enhancement recommendations
 	generateEnhancementRecommendations(analysis)
+}
+
+func compareSignals(refAnalysis, targetAnalysis *SignalAnalysis) {
+	fmt.Printf("\n=== SIGNAL COMPARISON ===\n")
+	
+	// SNR Comparison
+	fmt.Printf("SNR Comparison:\n")
+	fmt.Printf("  Reference: %.1f dB\n", refAnalysis.SNREstimate)
+	fmt.Printf("  Target:    %.1f dB\n", targetAnalysis.SNREstimate)
+	if refAnalysis.SNREstimate > targetAnalysis.SNREstimate+10 {
+		fmt.Printf("  ⚠️  Reference significantly stronger - consider reducing reference gain\n")
+	} else if targetAnalysis.SNREstimate > refAnalysis.SNREstimate+10 {
+		fmt.Printf("  ⚠️  Target significantly stronger - consider reducing target gain\n")
+	} else {
+		fmt.Printf("  ✅ Signal levels reasonably balanced\n")
+	}
+	
+	// Power Level Comparison
+	fmt.Printf("\nPower Level Comparison:\n")
+	fmt.Printf("  Reference: %.1f dB\n", refAnalysis.PowerLevel)
+	fmt.Printf("  Target:    %.1f dB\n", targetAnalysis.PowerLevel)
+	
+	// Quality Issues Comparison
+	fmt.Printf("\nQuality Issues:\n")
+	refIssues := countQualityIssues(refAnalysis)
+	targetIssues := countQualityIssues(targetAnalysis)
+	fmt.Printf("  Reference: %d issues detected\n", refIssues)
+	fmt.Printf("  Target:    %d issues detected\n", targetIssues)
+	
+	if refIssues == 0 && targetIssues == 0 {
+		fmt.Printf("  ✅ Both signals appear suitable for TDOA processing\n")
+	} else if refIssues > targetIssues {
+		fmt.Printf("  ⚠️  Reference signal needs more attention\n")
+	} else if targetIssues > refIssues {
+		fmt.Printf("  ⚠️  Target signal needs more attention\n")
+	}
+	
+	// TDOA Suitability Assessment
+	fmt.Printf("\n=== TDOA SUITABILITY ASSESSMENT ===\n")
+	refSuitable := assessTDOASuitability(refAnalysis)
+	targetSuitable := assessTDOASuitability(targetAnalysis)
+	
+	if refSuitable && targetSuitable {
+		fmt.Printf("✅ EXCELLENT: Both signals suitable for TDOA correlation\n")
+	} else if !refSuitable && !targetSuitable {
+		fmt.Printf("❌ POOR: Both signals need improvement before TDOA processing\n")
+	} else if !refSuitable {
+		fmt.Printf("⚠️  MARGINAL: Reference signal needs improvement\n")
+	} else {
+		fmt.Printf("⚠️  MARGINAL: Target signal needs improvement\n")
+	}
+}
+
+func countQualityIssues(analysis *SignalAnalysis) int {
+	issues := 0
+	if analysis.HasClipping { issues++ }
+	if analysis.HasOverload { issues++ }
+	if analysis.HasDeadZones { issues++ }
+	if analysis.HasNoise { issues++ }
+	if analysis.DCOffset > 10 { issues++ }
+	if analysis.IQImbalance > 0.1 { issues++ }
+	return issues
+}
+
+func assessTDOASuitability(analysis *SignalAnalysis) bool {
+	if analysis.HasClipping || analysis.HasOverload || analysis.HasDeadZones {
+		return false
+	}
+	if analysis.SNREstimate < 15 {
+		return false
+	}
+	if analysis.DCOffset > 15 || analysis.IQImbalance > 0.15 {
+		return false
+	}
+	return true
 }
 
 func generateGainRecommendations(analysis *SignalAnalysis) {
