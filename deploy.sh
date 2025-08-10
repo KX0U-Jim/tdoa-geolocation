@@ -64,8 +64,8 @@ cd librtlsdr-2freq
 mkdir build
 cd build
 
-echo "Configuring build with cmake..."
-cmake ..
+echo "Configuring build with cmake (enabling automatic kernel driver detaching)..."
+cmake .. -DDETACH_KERNEL_DRIVER=ON
 
 detect_cores
 echo "Building with make -j$BUILD_JOBS..."
@@ -177,6 +177,15 @@ fi
 echo "Testing RTL-SDR detection..."
 if timeout 5 ./librtlsdr-2freq/build/src/rtl_sdr --help >/dev/null 2>&1; then
     echo "✓ RTL-SDR binary responds"
+    
+    # Test kernel driver detaching if RTL-SDR hardware is present
+    echo "Testing automatic kernel driver detaching..."
+    if timeout 3 ./librtlsdr-2freq/build/src/rtl_sdr -f 100000000 -h 101000000 -g 20 -n 100 /tmp/test.dat >/dev/null 2>&1; then
+        echo "✓ Automatic kernel driver detaching works"
+        rm -f /tmp/test.dat
+    else
+        echo "⚠ Could not test kernel driver detaching (RTL-SDR may not be connected)"
+    fi
 else
     echo "⚠ RTL-SDR binary test timed out (normal if no hardware connected)"
 fi
