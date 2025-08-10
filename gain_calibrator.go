@@ -193,11 +193,14 @@ func runTestCollection(freq int64, gain float64, label string, iteration int) (*
 	// Run collector
 	fmt.Printf("  Collecting %d seconds at gain %.1f dB...\n", testDuration, gain)
 	
+	// librtlsdr-2freq requires different frequencies, use small offset for calibration
+	freq2 := freq + 100000 // +100 kHz offset for second frequency
+	
 	cmd := exec.Command("./collector",
 		fmt.Sprintf("--duration=%d", testDuration),
 		fmt.Sprintf("--gain=%.1f", gain),
 		fmt.Sprintf("%d", freq),
-		fmt.Sprintf("%d", freq), // Same frequency for both (single freq test)
+		fmt.Sprintf("%d", freq2), // Different frequency required by librtlsdr-2freq
 		fmt.Sprintf("%d", startTime),
 		fmt.Sprintf("cal_%s_g%.0f", label, gain))
 
