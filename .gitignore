@@ -34,7 +34,6 @@ ehthumbs.db
 Thumbs.db
 
 # RTL-SDR build artifacts
-librtlsdr-2freq/
 rtl-sdr/
 
 # Log files

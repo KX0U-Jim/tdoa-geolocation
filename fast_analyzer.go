@@ -142,8 +142,13 @@ func fastAnalyzeSamples(samples []byte, totalSamples int) *FastAnalysis {
 	analysis.IStdDev = math.Sqrt((iSumSq/n) - (analysis.IAvg * analysis.IAvg))
 	analysis.QStdDev = math.Sqrt((qSumSq/n) - (analysis.QAvg * analysis.QAvg))
 
-	// Power level
-	analysis.PowerLevel = 20 * math.Log10(math.Sqrt(analysis.IStdDev*analysis.IStdDev + analysis.QStdDev*analysis.QStdDev))
+	// Power level (with bounds checking to avoid -Inf)
+	powerMagnitude := math.Sqrt(analysis.IStdDev*analysis.IStdDev + analysis.QStdDev*analysis.QStdDev)
+	if powerMagnitude <= 1e-10 {
+		analysis.PowerLevel = -100.0 // Set floor at -100 dB instead of -Inf
+	} else {
+		analysis.PowerLevel = 20 * math.Log10(powerMagnitude)
+	}
 
 	// Quality flags
 	analysis.HasClipping = (iMin == 0 || iMax == 255 || qMin == 0 || qMax == 255)
