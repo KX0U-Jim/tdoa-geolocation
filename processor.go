@@ -888,22 +888,160 @@ func (p *TDOAProcessor) ProcessTDOA(datFiles []string) error {
 		fmt.Printf("Test delay %d: %.1f μs → %.1f m\n", i+1, delay*1e6, distance)
 	}
 	
-	// Basic triangulation attempt (simplified)
-	fmt.Println("\nFor actual geolocation, we need:")
-	fmt.Println("1. Non-zero correlations (better signal processing)")
-	fmt.Println("2. Hyperbolic positioning algorithm")
-	fmt.Println("3. Least-squares solver for overdetermined system")
+	// Calculate TDOA position using target signal time differences
+	fmt.Println("\n=== TDOA GEOLOCATION ===")
 	
-	station1 := collectorData[0].Station
-	station2 := collectorData[1].Station 
-	station3 := collectorData[2].Station
+	if len(targetTimeDifferences) < 3 {
+		return fmt.Errorf("need at least 3 time differences for TDOA, got %d", len(targetTimeDifferences))
+	}
 	
-	fmt.Printf("\nTriangulation geometry:")
-	fmt.Printf("Station 1 (%s): %.6f°, %.6f°\n", station1.Name, station1.Latitude, station1.Longitude)
-	fmt.Printf("Station 2 (%s): %.6f°, %.6f°\n", station2.Name, station2.Latitude, station2.Longitude)
-	fmt.Printf("Station 3 (%s): %.6f°, %.6f°\n", station3.Name, station3.Latitude, station3.Longitude)
-
+	// Convert time differences to range differences (multiply by speed of light)
+	const speedOfLight = 299792458.0 // Speed of light (m/s)
+	rangeDifferences := make([]float64, len(targetTimeDifferences))
+	for i, td := range targetTimeDifferences {
+		rangeDifferences[i] = td * speedOfLight
+	}
+	
+	fmt.Printf("Time differences (μs): ")
+	for _, td := range targetTimeDifferences {
+		fmt.Printf("%.3f ", td*1e6)
+	}
+	fmt.Println()
+	
+	fmt.Printf("Range differences (m): ")
+	for _, rd := range rangeDifferences {
+		fmt.Printf("%.1f ", rd)
+	}
+	fmt.Println()
+	
+	// Solve TDOA using least squares
+	lat, lon, elev, err := p.solveTDOA(collectorData, rangeDifferences)
+	if err != nil {
+		return fmt.Errorf("TDOA solution failed: %v", err)
+	}
+	
+	fmt.Printf("\n*** CALCULATED TRANSMITTER LOCATION ***\n")
+	fmt.Printf("Latitude:  %.6f°\n", lat)
+	fmt.Printf("Longitude: %.6f°\n", lon) 
+	fmt.Printf("Elevation: %.1f m\n", elev)
+	
 	return nil
+}
+
+// solveTDOA solves TDOA positioning using least squares
+func (p *TDOAProcessor) solveTDOA(collectorData []struct {
+	Station   Station
+	Data      []complex64
+	RefSig    []complex64
+	TargetSig []complex64
+}, rangeDifferences []float64) (float64, float64, float64, error) {
+	
+	// Convert stations to ECEF coordinates for calculation
+	stations := make([]Point3D, len(collectorData))
+	for i, data := range collectorData {
+		stations[i] = latLonToECEF(data.Station.Latitude, data.Station.Longitude, data.Station.Elevation)
+	}
+	
+	// TDOA uses hyperbolic positioning - need to solve system of equations
+	// For 3 stations, we have 2 independent TDOA measurements (station pairs)
+	// Range difference equations: |r1 - r_tx| - |r2 - r_tx| = c * (t1 - t2)
+	
+	// Use iterative approach (Gauss-Newton) starting from centroid
+	centroidLat := (collectorData[0].Station.Latitude + collectorData[1].Station.Latitude + collectorData[2].Station.Latitude) / 3.0
+	centroidLon := (collectorData[0].Station.Longitude + collectorData[1].Station.Longitude + collectorData[2].Station.Longitude) / 3.0
+	centroidElev := (collectorData[0].Station.Elevation + collectorData[1].Station.Elevation + collectorData[2].Station.Elevation) / 3.0
+	
+	// Initial guess at centroid
+	x := latLonToECEF(centroidLat, centroidLon, centroidElev)
+	
+	fmt.Printf("Initial guess: %.6f°, %.6f°, %.1fm\n", centroidLat, centroidLon, centroidElev)
+	
+	// Newton-Raphson iterations
+	for iter := 0; iter < 10; iter++ {
+		// Calculate current range differences
+		r1 := math.Sqrt((x.X-stations[0].X)*(x.X-stations[0].X) + (x.Y-stations[0].Y)*(x.Y-stations[0].Y) + (x.Z-stations[0].Z)*(x.Z-stations[0].Z))
+		r2 := math.Sqrt((x.X-stations[1].X)*(x.X-stations[1].X) + (x.Y-stations[1].Y)*(x.Y-stations[1].Y) + (x.Z-stations[1].Z)*(x.Z-stations[1].Z))
+		r3 := math.Sqrt((x.X-stations[2].X)*(x.X-stations[2].X) + (x.Y-stations[2].Y)*(x.Y-stations[2].Y) + (x.Z-stations[2].Z)*(x.Z-stations[2].Z))
+		
+		// Residuals (difference between measured and calculated range differences)
+		residual1 := (r2 - r1) - rangeDifferences[0]  // Station 1-2 pair
+		residual2 := (r3 - r1) - rangeDifferences[1]  // Station 1-3 pair
+		
+		if math.Abs(residual1) < 1.0 && math.Abs(residual2) < 1.0 {
+			fmt.Printf("Converged after %d iterations\n", iter)
+			break
+		}
+		
+		// Calculate Jacobian matrix
+		// Partial derivatives of range differences with respect to x, y
+		dx1 := (x.X - stations[0].X) / r1
+		dy1 := (x.Y - stations[0].Y) / r1
+		
+		dx2 := (x.X - stations[1].X) / r2
+		dy2 := (x.Y - stations[1].Y) / r2
+		
+		dx3 := (x.X - stations[2].X) / r3
+		dy3 := (x.Y - stations[2].Y) / r3
+		
+		// Jacobian for TDOA (range difference derivatives)
+		J11 := dx2 - dx1  // d(r2-r1)/dx
+		J12 := dy2 - dy1  // d(r2-r1)/dy
+		
+		J21 := dx3 - dx1  // d(r3-r1)/dx
+		J22 := dy3 - dy1  // d(r3-r1)/dy
+		
+		// Solve 2x3 system using pseudo-inverse (least squares)
+		// J * delta = -residuals
+		// Use simplified 2-equation solver
+		det := J11*J22 - J12*J21
+		if math.Abs(det) < 1e-10 {
+			return 0, 0, 0, fmt.Errorf("singular Jacobian matrix at iteration %d", iter)
+		}
+		
+		// Solve for dx, dy (ignore dz for now - assume flat earth approximation)
+		dx := (-residual1*J22 + residual2*J12) / det
+		dy := (residual1*J21 - residual2*J11) / det
+		dz := 0.0 // Simplified - keep elevation constant
+		
+		// Update position
+		stepSize := 0.5  // Damped Newton step
+		x.X += stepSize * dx
+		x.Y += stepSize * dy
+		x.Z += stepSize * dz
+		
+		if iter == 9 {
+			fmt.Printf("Maximum iterations reached\n")
+		}
+	}
+	
+	// Convert back to lat/lon
+	lat, lon, elev := ecefToLatLon(x.X, x.Y, x.Z)
+	return lat, lon, elev, nil
+}
+
+// ecefToLatLon converts ECEF coordinates back to latitude/longitude/elevation
+func ecefToLatLon(x, y, z float64) (float64, float64, float64) {
+	const (
+		a  = 6378137.0         // WGS84 semi-major axis (meters)
+		f  = 1.0 / 298.257223563 // WGS84 flattening
+		e2 = 2*f - f*f         // First eccentricity squared
+	)
+	
+	p := math.Sqrt(x*x + y*y)
+	lon := math.Atan2(y, x)
+	
+	// Iterative solution for latitude
+	lat := math.Atan2(z, p*(1-e2))
+	for i := 0; i < 5; i++ {
+		N := a / math.Sqrt(1 - e2*math.Sin(lat)*math.Sin(lat))
+		elev := p/math.Cos(lat) - N
+		lat = math.Atan2(z, p*(1-e2*N/(N+elev)))
+	}
+	
+	N := a / math.Sqrt(1 - e2*math.Sin(lat)*math.Sin(lat))
+	elev := p/math.Cos(lat) - N
+	
+	return lat * 180.0 / math.Pi, lon * 180.0 / math.Pi, elev
 }
 
 func main() {
