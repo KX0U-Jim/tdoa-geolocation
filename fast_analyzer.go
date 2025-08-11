@@ -65,34 +65,47 @@ func fastAnalyzeDualFrequencyFile(filename string) (*FastAnalysis, *FastAnalysis
 	totalBytes := fileInfo.Size()
 	totalSamples := int(totalBytes / bytesPerSample)
 
-	// For speed: only analyze first 65536 samples of each signal
-	maxSamples := 65536
-	samplesPerBlock := totalSamples / 3
+	// librtlsdr-2freq pattern: freq1, freq2, freq1 (3 blocks)
+	// Each block is 1/3 of the total samples
+	blockSize := totalSamples / 3
 	
-	if samplesPerBlock*2 < maxSamples {
-		maxSamples = samplesPerBlock * 2
-	}
-	if samplesPerBlock < maxSamples/2 {
-		maxSamples = samplesPerBlock
+	if blockSize == 0 {
+		return nil, nil, fmt.Errorf("file too small for dual-frequency analysis")
 	}
 
-	// Read just what we need
-	samples := make([]byte, maxSamples*3*bytesPerSample)
-	_, err = file.Read(samples)
+	// For speed: analyze first 32768 samples from each block
+	analysisSize := 32768
+	if blockSize < analysisSize {
+		analysisSize = blockSize
+	}
+
+	// Read all the data
+	allBytes := make([]byte, totalBytes)
+	_, err = file.Read(allBytes)
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to read samples: %v", err)
 	}
 
-	// Extract signals for fast analysis
-	refSamples := make([]byte, maxSamples*bytesPerSample*2)
-	copy(refSamples[0:maxSamples*bytesPerSample], samples[0:maxSamples*bytesPerSample])
-	copy(refSamples[maxSamples*bytesPerSample:], samples[maxSamples*2*bytesPerSample:maxSamples*3*bytesPerSample])
+	// Extract reference signal: blocks 1 and 3 (freq1)
+	refBytes := make([]byte, analysisSize*2*bytesPerSample)
+	
+	// Block 1 (first freq1 block)
+	copy(refBytes[0:analysisSize*bytesPerSample], 
+		allBytes[0:analysisSize*bytesPerSample])
+	
+	// Block 3 (second freq1 block)  
+	block3Start := blockSize * 2 * bytesPerSample
+	copy(refBytes[analysisSize*bytesPerSample:analysisSize*2*bytesPerSample],
+		allBytes[block3Start:block3Start+analysisSize*bytesPerSample])
 
-	targetSamples := samples[maxSamples*bytesPerSample : maxSamples*2*bytesPerSample]
+	// Extract target signal: block 2 (freq2)
+	block2Start := blockSize * bytesPerSample
+	targetBytes := make([]byte, analysisSize*bytesPerSample)
+	copy(targetBytes, allBytes[block2Start:block2Start+analysisSize*bytesPerSample])
 
 	// Fast analysis
-	refAnalysis := fastAnalyzeSamples(refSamples, maxSamples*2)
-	targetAnalysis := fastAnalyzeSamples(targetSamples, maxSamples)
+	refAnalysis := fastAnalyzeSamples(refBytes, analysisSize*2)
+	targetAnalysis := fastAnalyzeSamples(targetBytes, analysisSize)
 
 	return refAnalysis, targetAnalysis, nil
 }

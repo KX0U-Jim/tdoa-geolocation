@@ -130,6 +130,7 @@ func main() {
 	}
 	
 	// Add gain parameters based on what was specified
+	// TDOA requires fixed gain for consistent signal measurements
 	if *gain1 != 0 {
 		cmd = append(cmd, "-1", fmt.Sprintf("%.1f", *gain1))
 	}
@@ -138,6 +139,14 @@ func main() {
 	}
 	if *gain1 == 0 && *gain2 == 0 && *gain != 0 {
 		cmd = append(cmd, "-g", fmt.Sprintf("%.1f", *gain))
+	}
+	
+	// Warn if using AGC (auto gain) for TDOA collection
+	if *gain1 == 0 && *gain2 == 0 && *gain == 0 {
+		fmt.Printf("⚠️  WARNING: Using AGC (auto gain) for TDOA collection!\n")
+		fmt.Printf("   AGC causes power variations that degrade correlation quality.\n")
+		fmt.Printf("   Recommend using fixed gain: --gain1=X --gain2=Y\n")
+		fmt.Printf("   Proceeding with AGC anyway...\n")
 	}
 	
 	cmd = append(cmd, "-n", fmt.Sprintf("%d", samplesPerFreq))
@@ -159,5 +168,82 @@ func main() {
 	fmt.Printf("Collection completed at: %d (epoch milliseconds)\n", epochMillis)
 	fmt.Printf("Data saved to: %s\n", filename)
 	
+	// Validate output file structure
+	validateDataFile(filename, totalSamples)
+	
 	_ = sampleBuffer // Remove this once we integrate better
+}
+
+// validateDataFile checks if the generated file has the expected structure
+func validateDataFile(filename string, expectedSamples int) {
+	file, err := os.Open(filename)
+	if err != nil {
+		fmt.Printf("⚠️  Could not validate file %s: %v\n", filename, err)
+		return
+	}
+	defer file.Close()
+
+	fileInfo, err := file.Stat()
+	if err != nil {
+		fmt.Printf("⚠️  Could not get file info: %v\n", err)
+		return
+	}
+
+	actualBytes := fileInfo.Size()
+	expectedBytes := int64(expectedSamples * 2) // 2 bytes per I/Q sample
+	
+	fmt.Printf("File validation:\n")
+	fmt.Printf("  Expected: %d samples (%d bytes)\n", expectedSamples, expectedBytes)
+	fmt.Printf("  Actual:   %d samples (%d bytes)\n", actualBytes/2, actualBytes)
+	
+	if actualBytes != expectedBytes {
+		fmt.Printf("  ❌ Size mismatch! Expected %d, got %d bytes\n", expectedBytes, actualBytes)
+		return
+	}
+	
+	// Quick power check on the 3 blocks
+	blockSize := expectedSamples / 3
+	testSize := 1000 // Small sample for quick check
+	
+	powers := make([]float64, 3)
+	blockNames := []string{"REF (block 1)", "TGT (block 2)", "REF (block 3)"}
+	
+	for i := 0; i < 3; i++ {
+		offset := int64(i * blockSize * 2) // 2 bytes per sample
+		file.Seek(offset, 0)
+		
+		testData := make([]byte, testSize*2)
+		file.Read(testData)
+		
+		var sumSq float64
+		for j := 0; j < testSize; j++ {
+			iVal := float64(testData[j*2]) - 127.5
+			qVal := float64(testData[j*2+1]) - 127.5
+			sumSq += iVal*iVal + qVal*qVal
+		}
+		powers[i] = sumSq / float64(testSize)
+		
+		fmt.Printf("  %s power: %.2f\n", blockNames[i], powers[i])
+	}
+	
+	// Check if REF blocks have consistent power (within 2x factor)
+	refRatio := powers[2] / powers[0]
+	if refRatio > 2.0 || refRatio < 0.5 {
+		fmt.Printf("  ⚠️  REF blocks have inconsistent power (%.2fx difference)\n", refRatio)
+		fmt.Printf("     This suggests AGC or RF environment changes during collection\n")
+	} else {
+		fmt.Printf("  ✅ REF blocks have consistent power\n")
+	}
+	
+	// Check if TGT block is sufficiently different from REF
+	tgtRefRatio1 := powers[1] / powers[0]
+	tgtRefRatio2 := powers[1] / powers[2]
+	avgTgtRefRatio := (tgtRefRatio1 + tgtRefRatio2) / 2.0
+	
+	if avgTgtRefRatio > 1.5 || avgTgtRefRatio < 0.67 { // >50% difference
+		fmt.Printf("  ✅ TGT signal sufficiently different from REF (%.2fx ratio)\n", avgTgtRefRatio)
+	} else {
+		fmt.Printf("  ⚠️  TGT and REF signals very similar (%.2fx ratio)\n", avgTgtRefRatio)
+		fmt.Printf("     May indicate weak target signal or frequency selection issues\n")
+	}
 }
