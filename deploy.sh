@@ -61,6 +61,18 @@ fi
 git clone https://github.com/DC9ST/librtlsdr-2freq.git
 cd librtlsdr-2freq
 
+# Apply dual-gain patch if it exists and hasn't been applied
+if [ -f "../dual-gain.patch" ] && ! grep -q "gain1_specific" src/rtl_sdr.c; then
+    echo "Applying dual-gain patch..."
+    if patch -p1 < ../dual-gain.patch; then
+        echo "✓ Dual-gain patch applied successfully"
+    else
+        echo "✗ Warning: Failed to apply dual-gain patch"
+    fi
+else
+    echo "✓ Dual-gain modifications already present or patch not found"
+fi
+
 mkdir build
 cd build
 
@@ -79,12 +91,20 @@ fi
 
 echo "✓ librtlsdr-2freq built successfully"
 
-# Test dual-frequency support
+# Test dual-frequency and dual-gain support
 echo "Testing dual-frequency parameters..."
 if ./src/rtl_sdr --help 2>&1 | grep -q "\-f.*\-h"; then
     echo "✓ Dual-frequency support confirmed"
 else
     echo "✗ Warning: Dual-frequency parameters not detected in help output"
+fi
+
+echo "Testing dual-gain support..."
+if ./src/rtl_sdr 2>&1 | grep -q "\-1.*gain1\|\-2.*gain2"; then
+    echo "✓ Dual-gain support confirmed (-1 and -2 options available)"
+else
+    echo "✗ Warning: Dual-gain parameters not detected - collector may fail"
+    echo "  Expected options: -1 gain1 and -2 gain2"
 fi
 
 cd ../..

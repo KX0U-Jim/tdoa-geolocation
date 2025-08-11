@@ -1,0 +1,126 @@
+diff --git a/src/rtl_sdr.c b/src/rtl_sdr.c
+index d73fb22..be517ec 100644
+--- a/src/rtl_sdr.c
++++ b/src/rtl_sdr.c
+@@ -53,6 +53,10 @@ static uint32_t bytes_to_read = 6000000 * 2; // sum of i and q samples
+ static rtlsdr_dev_t *dev = NULL;
+ static int frequency_changed = 0;
+ static int frequency_changed_back = 0;
++static int current_gain = 0;
++static int gain_common = 0;
++static int gain1_specific = 0;
++static int gain2_specific = 0;
+ uint32_t frequency1 = 100000000;
+ uint32_t frequency2 = 100000000;
+ 
+@@ -70,6 +74,8 @@ void usage(void)
+ 		"\t[-s samplerate (default: 2048000 Hz)]\n"
+ 		"\t[-d device_index (default: 0)]\n"
+ 		"\t[-g gain (default: 0 for auto)]\n"
++		"\t[-1 gain1 (gain for frequency 1/reference, overrides -g)]\n"
++		"\t[-2 gain2 (gain for frequency 2/target, overrides -g)]\n"
+ 		"\t[-p ppm_error (default: 0)]\n"
+ 		"\t[-b output_block_size (default: 16 * 16384)]\n"
+ 		"\t[-n number n of IQ samples to read per frequency (total length = 3x specified)(default: 2e6)]\n"
+@@ -122,12 +128,39 @@ static void rtlsdr_callback(unsigned char *buf, uint32_t len, void *ctx)
+ 			//switch to frequency 2
+ 			if ((bytes_to_read < bytes_to_read_per_freq*2) && (frequency_changed == 0)) {
+ 				verbose_set_frequency(dev, frequency2);
++				
++				/* Set gain for frequency 2 */
++				if (gain2_specific != 0) {
++					/* Use specific gain for frequency 2 */
++					int freq2_gain = nearest_gain(dev, gain2_specific);
++					verbose_gain_set(dev, freq2_gain);
++				} else if (gain_common != 0 && current_gain != 0) {
++					/* Keep common gain setting (already set) */
++				} else if (current_gain == 0) {
++					/* Keep auto gain */
++					verbose_auto_gain(dev);
++				}
++				
+ 				frequency_changed = 1;
+ 			}
+ 			
+ 			// switch back to frequency 1 again
+ 			if ((bytes_to_read < bytes_to_read_per_freq) && (frequency_changed_back == 0)) {
+ 				verbose_set_frequency(dev, frequency1);
++				
++				/* Restore gain for frequency 1 */
++				if (gain1_specific != 0) {
++					/* Use specific gain for frequency 1 */
++					int freq1_gain = nearest_gain(dev, gain1_specific);
++					verbose_gain_set(dev, freq1_gain);
++				} else if (gain_common != 0 && current_gain != 0) {
++					/* Restore common gain setting */
++					verbose_gain_set(dev, current_gain);
++				} else if (current_gain == 0) {
++					/* Keep auto gain */
++					verbose_auto_gain(dev);
++				}
++				
+ 				frequency_changed_back = 1;
+ 			}
+ 
+@@ -144,6 +177,8 @@ int main(int argc, char **argv)
+ 	int n_read;
+ 	int r, opt;
+ 	int gain = 0;
++	int gain1 = 0;  // Gain for frequency 1 (reference)
++	int gain2 = 0;  // Gain for frequency 2 (target)
+ 	int ppm_error = 0;
+ 	int sync_mode = 0;
+ 	FILE *file;
+@@ -153,7 +188,7 @@ int main(int argc, char **argv)
+ 	uint32_t samp_rate = DEFAULT_SAMPLE_RATE;
+ 	uint32_t out_block_size = DEFAULT_BUF_LENGTH;
+ 
+-	while ((opt = getopt(argc, argv, "d:f:h:g:s:b:n:p:S")) != -1) {
++	while ((opt = getopt(argc, argv, "d:f:h:g:1:2:s:b:n:p:S")) != -1) {
+ 		switch (opt) {
+ 		case 'd':
+ 			dev_index = verbose_device_search(optarg);
+@@ -168,6 +203,12 @@ int main(int argc, char **argv)
+ 		case 'g':
+ 			gain = (int)(atof(optarg) * 10); /* tenths of a dB */
+ 			break;
++		case '1':
++			gain1 = (int)(atof(optarg) * 10); /* tenths of a dB for frequency 1 */
++			break;
++		case '2':
++			gain2 = (int)(atof(optarg) * 10); /* tenths of a dB for frequency 2 */
++			break;
+ 		case 's':
+ 			samp_rate = (uint32_t)atofs(optarg);
+ 			break;
+@@ -239,13 +280,24 @@ int main(int argc, char **argv)
+ 	/* Set the frequency */
+ 	verbose_set_frequency(dev, frequency1);
+ 
+-	if (0 == gain) {
+-		 /* Enable automatic gain */
+-		verbose_auto_gain(dev);
++	/* Set global gain variables for callback function */
++	gain_common = gain;
++	gain1_specific = gain1;
++	gain2_specific = gain2;
++	
++	/* Set initial gain for frequency 1 */
++	if (gain1 != 0) {
++		/* Use specific gain for frequency 1 */
++		current_gain = nearest_gain(dev, gain1);
++		verbose_gain_set(dev, current_gain);
++	} else if (gain != 0) {
++		/* Use common gain setting */
++		current_gain = nearest_gain(dev, gain);
++		verbose_gain_set(dev, current_gain);
+ 	} else {
+-		/* Enable manual gain */
+-		gain = nearest_gain(dev, gain);
+-		verbose_gain_set(dev, gain);
++		/* Enable automatic gain */
++		verbose_auto_gain(dev);
++		current_gain = 0;
+ 	}
+ 
+ 	verbose_ppm_set(dev, ppm_error);
