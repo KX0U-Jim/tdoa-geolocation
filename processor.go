@@ -465,37 +465,114 @@ func (p *TDOAProcessor) enhanceWeakSignal(signal []complex64, label string) []co
 	return signal
 }
 
-// preprocessSignal applies enhanced filtering and normalization
+// preprocessSignal applies minimal processing to preserve correlation features
 func (p *TDOAProcessor) preprocessSignal(signal []complex64, label string) []complex64 {
 	fmt.Printf("Preprocessing %s signal (%d samples)\n", label, len(signal))
 	
-	// Check signal power to decide on processing approach
+	// Check signal power
 	initialPower := p.calculateSignalPower(signal)
 	fmt.Printf("Initial signal power: %.9f\n", initialPower)
 	
-	if initialPower < 0.001 {
-		// Very weak signal - use aggressive enhancement
-		fmt.Printf("Detected very weak signal - applying aggressive filtering\n")
-		return p.enhanceWeakSignal(signal, label)
+	// For strong FM signals, use minimal processing to preserve correlation features
+	if initialPower > 0.01 {  // Raised threshold - 92.3 MHz has 0.316 power, needs special handling
+		fmt.Printf("Strong FM signal - using instantaneous frequency correlation approach\n")
+		
+		// For FM signals, correlation of instantaneous frequency works better than amplitude
+		// Convert to instantaneous frequency representation
+		signal = p.convertToInstantaneousFrequency(signal)
+		
+		// Remove DC bias from frequency signal
+		signal = p.removeDCBias(signal)
+		
+		// Light smoothing to reduce noise in frequency domain
+		signal = p.applyLowPassFilter(signal, 10)
+		
+		// Normalize to unit power
+		signal = p.normalizeSignal(signal)
+		
+		return signal
+	} else if initialPower > 0.001 {
+		fmt.Printf("Moderate signal - envelope correlation approach\n")
+		
+		// For moderate signals, use envelope correlation
+		signal = p.convertToEnvelope(signal)
+		
+		// Remove DC bias
+		signal = p.removeDCBias(signal)
+		
+		// Normalize to unit power  
+		signal = p.normalizeSignal(signal)
+		
+		return signal
 	} else {
-		// Standard processing for stronger signals
-		fmt.Printf("Standard signal processing\n")
+		// Weak signals - enhanced processing but preserve timing
+		fmt.Printf("Weak signal - standard processing with timing preservation\n")
 		
 		// Step 1: Remove DC bias
 		signal = p.removeDCBias(signal)
 		
-		// Step 2: Apply moderate bandpass filtering
+		// Step 2: Very light filtering only
 		sampleRate := 2000000.0
-		signal = p.applyBandpassFilter(signal, 500, 50000, sampleRate)
+		signal = p.applyBandpassFilter(signal, 100, 200000, sampleRate) // Wide band to preserve FM content
 		
-		// Step 3: Apply light smoothing
-		signal = p.applyLowPassFilter(signal, 100)
-		
-		// Step 4: Normalize to unit power
+		// Step 3: Normalize to unit power
 		signal = p.normalizeSignal(signal)
 		
 		return signal
 	}
+}
+
+// convertToInstantaneousFrequency converts FM signal to instantaneous frequency for better correlation
+func (p *TDOAProcessor) convertToInstantaneousFrequency(signal []complex64) []complex64 {
+	if len(signal) < 2 {
+		return signal
+	}
+	
+	freq := make([]complex64, len(signal))
+	
+	for i := 1; i < len(signal); i++ {
+		// Calculate instantaneous frequency using phase difference
+		curr := signal[i]
+		prev := signal[i-1]
+		
+		// Avoid division by zero
+		if real(prev) == 0 && imag(prev) == 0 {
+			freq[i] = 0
+			continue
+		}
+		
+		// Phase difference = arg(curr * conj(prev))
+		conjugated := complex(real(prev), -imag(prev))
+		phaseRatio := curr * conjugated
+		
+		// Extract frequency as the imaginary part of log
+		if real(phaseRatio) != 0 || imag(phaseRatio) != 0 {
+			magnitude := real(phaseRatio)*real(phaseRatio) + imag(phaseRatio)*imag(phaseRatio)
+			if magnitude > 1e-10 {
+				// Instantaneous frequency ≈ phase difference
+				instFreq := float32(math.Atan2(float64(imag(phaseRatio)), float64(real(phaseRatio))))
+				freq[i] = complex(instFreq, 0) // Store as real value
+			}
+		}
+	}
+	
+	// Copy first sample
+	freq[0] = freq[1]
+	
+	return freq
+}
+
+// convertToEnvelope converts signal to its envelope for correlation
+func (p *TDOAProcessor) convertToEnvelope(signal []complex64) []complex64 {
+	envelope := make([]complex64, len(signal))
+	
+	for i, sample := range signal {
+		// Calculate magnitude (envelope)
+		magnitude := float32(math.Sqrt(float64(real(sample)*real(sample) + imag(sample)*imag(sample))))
+		envelope[i] = complex(magnitude, 0)
+	}
+	
+	return envelope
 }
 
 // nextPowerOfTwo finds the next power of 2 greater than or equal to n
@@ -702,13 +779,15 @@ func (p *TDOAProcessor) timeDomainCorrelation(signal1, signal2 []complex64, maxL
 			
 			blockCorr := 0.0
 			
-			// Correlate this block
+			// Correlate this block using complex correlation for FM frequency/envelope signals
 			for i := blockStart; i < blockEnd; i++ {
 				t := template[i]
 				s := signal[delay+i]
 				
-				// Complex correlation (conjugate of template)
-				blockCorr += float64(real(t)*real(s) + imag(t)*imag(s))
+				// For frequency/envelope signals (real-valued), use simple real correlation
+				// This preserves timing information better than magnitude correlation
+				realPart := float64(real(t) * real(s))
+				blockCorr += realPart
 			}
 			
 			// Normalize block correlation
@@ -721,11 +800,10 @@ func (p *TDOAProcessor) timeDomainCorrelation(signal1, signal2 []complex64, maxL
 			// Average across blocks (coherent integration)
 			correlation /= float64(numBlocks)
 			
-			// Coherent integration gain: sqrt(N) improvement in SNR
-			coherentGain := math.Sqrt(float64(numBlocks * blockSize))
-			correlation *= coherentGain
+			// For peak detection, use the absolute correlation value
+			corrMagnitude := math.Abs(correlation)
 			
-			if math.Abs(correlation) > math.Abs(bestCorr) {
+			if corrMagnitude > math.Abs(bestCorr) {
 				bestCorr = correlation
 				bestDelay = delay
 			}
@@ -738,6 +816,74 @@ func (p *TDOAProcessor) timeDomainCorrelation(signal1, signal2 []complex64, maxL
 	}
 	
 	fmt.Printf("\nTime domain correlation: %.6f at delay %d samples\n", bestCorr, bestDelay)
+	
+	// Validate that the delay is reasonable for the baseline distances
+	maxReasonableDelay := 120 // ~60 μs at 2 Msps (just above 57 μs max expected)
+	if bestDelay > maxReasonableDelay {
+		fmt.Printf("WARNING: Delay %d samples (%.1f μs) exceeds reasonable range for baseline distances\n", 
+			bestDelay, float64(bestDelay)/2e6*1e6)
+		fmt.Printf("Maximum expected delay: %.1f μs for 17 km baseline\n", 17000.0/299792458.0*1e6)
+		fmt.Printf("This suggests correlation algorithm found wrong peak\n")
+		
+		// Try to find a better peak within reasonable range
+		secondBestDelay := 0
+		secondBestCorr := 0.0
+		
+		// Search for secondary peaks within reasonable range
+		for delay := 0; delay < maxReasonableDelay; delay++ {
+			if delay == bestDelay {
+				continue // Skip the already found peak
+			}
+			
+			correlation := 0.0
+			numBlocks := 0
+			
+			// Recalculate correlation for this delay
+			blockSize := 10000
+			templateLen := len(template)
+			if templateLen == len(signal) {
+				templateLen = templateLen - 2000
+			}
+			
+			for blockStart := 0; blockStart < templateLen-blockSize; blockStart += blockSize {
+				blockEnd := blockStart + blockSize
+				if delay + blockEnd > len(signal) {
+					break
+				}
+				
+				blockCorr := 0.0
+				for i := blockStart; i < blockEnd; i++ {
+					t := template[i]
+					s := signal[delay+i]
+					realPart := float64(real(t) * real(s))
+					blockCorr += realPart
+				}
+				
+				blockCorr /= float64(blockSize)
+				correlation += blockCorr
+				numBlocks++
+			}
+			
+			if numBlocks > 0 {
+				correlation /= float64(numBlocks)
+				corrMagnitude := math.Abs(correlation)
+				
+				if corrMagnitude > math.Abs(secondBestCorr) {
+					secondBestCorr = correlation
+					secondBestDelay = delay
+				}
+			}
+		}
+		
+		// If we found a reasonable alternative, use it
+		if secondBestDelay < maxReasonableDelay && math.Abs(secondBestCorr) > math.Abs(bestCorr)*0.5 {
+			fmt.Printf("Found better peak within reasonable range: delay=%d samples (%.1f μs), correlation=%.6f\n", 
+				secondBestDelay, float64(secondBestDelay)/2e6*1e6, secondBestCorr)
+			bestDelay = secondBestDelay
+			bestCorr = secondBestCorr
+		}
+	}
+	
 	return bestDelay, bestCorr
 }
 
@@ -961,10 +1107,60 @@ func (p *TDOAProcessor) solveTDOA(collectorData []struct {
 	TargetSig []complex64
 }, rangeDifferences []float64) (float64, float64, float64, error) {
 	
-	// Convert stations to ECEF coordinates for calculation
+	// Validate input data first and filter out outliers
+	maxExpectedRange := 17000.0 * 1.2  // 1.2x max baseline distance for safety margin
+	fmt.Printf("Validating range differences against baseline distances...\n")
+	
+	validIndices := []int{}
+	filteredRangeDiffs := []float64{}
+	
+	for i, rangeDiff := range rangeDifferences {
+		if math.Abs(rangeDiff) > maxExpectedRange {
+			fmt.Printf("FILTERING OUT: Range difference %d: %.1fm exceeds expected maximum %.1fm\n", 
+				i, rangeDiff, maxExpectedRange)
+			fmt.Printf("This measurement is unreliable and will be excluded\n")
+		} else {
+			fmt.Printf("VALID: Range difference %d: %.1fm (within ±%.1fm limit)\n", 
+				i, rangeDiff, maxExpectedRange)
+			validIndices = append(validIndices, i)
+			filteredRangeDiffs = append(filteredRangeDiffs, rangeDiff)
+		}
+	}
+	
+	if len(filteredRangeDiffs) < 2 {
+		return 0, 0, 0, fmt.Errorf("insufficient valid measurements: only %d of %d range differences are reliable", 
+			len(filteredRangeDiffs), len(rangeDifferences))
+	}
+	
+	fmt.Printf("Using %d of %d range difference measurements\n", len(filteredRangeDiffs), len(rangeDifferences))
+	rangeDifferences = filteredRangeDiffs
+	
+	// Check station geometry - ensure stations aren't collinear
 	stations := make([]Point3D, len(collectorData))
 	for i, data := range collectorData {
 		stations[i] = latLonToECEF(data.Station.Latitude, data.Station.Longitude, data.Station.Elevation)
+	}
+	
+	// Calculate area of triangle formed by stations (indicates geometry quality)
+	if len(stations) >= 3 {
+		// Vector from station 0 to 1
+		v1x := stations[1].X - stations[0].X
+		v1y := stations[1].Y - stations[0].Y
+		
+		// Vector from station 0 to 2  
+		v2x := stations[2].X - stations[0].X
+		v2y := stations[2].Y - stations[0].Y
+		
+		// Cross product magnitude = 2 * triangle area
+		crossProduct := math.Abs(v1x*v2y - v1y*v2x)
+		triangleArea := crossProduct / 2.0
+		
+		fmt.Printf("Station geometry triangle area: %.1f m²\n", triangleArea)
+		
+		if triangleArea < 10000000.0 { // 10 km² minimum for good geometry
+			fmt.Printf("WARNING: Poor station geometry (small triangle area)\n")
+			fmt.Printf("This may cause TDOA solution instability\n")
+		}
 	}
 	
 	// TDOA uses hyperbolic positioning - need to solve system of equations
@@ -988,16 +1184,7 @@ func (p *TDOAProcessor) solveTDOA(collectorData []struct {
 		r2 := math.Sqrt((x.X-stations[1].X)*(x.X-stations[1].X) + (x.Y-stations[1].Y)*(x.Y-stations[1].Y) + (x.Z-stations[1].Z)*(x.Z-stations[1].Z))
 		r3 := math.Sqrt((x.X-stations[2].X)*(x.X-stations[2].X) + (x.Y-stations[2].Y)*(x.Y-stations[2].Y) + (x.Z-stations[2].Z)*(x.Z-stations[2].Z))
 		
-		// Residuals (difference between measured and calculated range differences)
-		residual1 := (r2 - r1) - rangeDifferences[0]  // Station 1-2 pair
-		residual2 := (r3 - r1) - rangeDifferences[1]  // Station 1-3 pair
-		
-		if math.Abs(residual1) < 1.0 && math.Abs(residual2) < 1.0 {
-			fmt.Printf("Converged after %d iterations\n", iter)
-			break
-		}
-		
-		// Calculate Jacobian matrix
+		// Calculate Jacobian matrix components first
 		// Partial derivatives of range differences with respect to x, y
 		dx1 := (x.X - stations[0].X) / r1
 		dy1 := (x.Y - stations[0].Y) / r1
@@ -1008,31 +1195,104 @@ func (p *TDOAProcessor) solveTDOA(collectorData []struct {
 		dx3 := (x.X - stations[2].X) / r3
 		dy3 := (x.Y - stations[2].Y) / r3
 		
-		// Jacobian for TDOA (range difference derivatives)
-		J11 := dx2 - dx1  // d(r2-r1)/dx
-		J12 := dy2 - dy1  // d(r2-r1)/dy
+		// Calculate residuals based on available measurements
+		var residual1, residual2 float64
+		var J11, J12, J21, J22 float64
 		
-		J21 := dx3 - dx1  // d(r3-r1)/dx
-		J22 := dy3 - dy1  // d(r3-r1)/dy
+		if len(rangeDifferences) == 2 {
+			// Standard case: use both range differences
+			residual1 = (r2 - r1) - rangeDifferences[0]  // Station 1-2 pair
+			residual2 = (r3 - r1) - rangeDifferences[1]  // Station 1-3 pair
+			
+			// Standard Jacobian
+			J11 = dx2 - dx1  // d(r2-r1)/dx
+			J12 = dy2 - dy1  // d(r2-r1)/dy
+			J21 = dx3 - dx1  // d(r3-r1)/dx  
+			J22 = dy3 - dy1  // d(r3-r1)/dy
+			
+		} else if len(rangeDifferences) == 1 {
+			// Only one valid measurement - use it twice with different reference
+			if len(validIndices) > 0 && validIndices[0] == 0 {
+				// Have measurement 0 (station 1-2 pair)
+				residual1 = (r2 - r1) - rangeDifferences[0]
+				residual2 = 0.0 // No second measurement
+				
+				J11 = dx2 - dx1
+				J12 = dy2 - dy1
+				J21 = 0.0  // No second equation
+				J22 = 1.0  // Avoid singularity
+			} else {
+				// Have measurement 1 (station 1-3 pair)  
+				residual1 = (r3 - r1) - rangeDifferences[0]
+				residual2 = 0.0
+				
+				J11 = dx3 - dx1
+				J12 = dy3 - dy1
+				J21 = 0.0
+				J22 = 1.0
+			}
+			fmt.Printf("Using single measurement approach\n")
+		} else {
+			return 0, 0, 0, fmt.Errorf("no valid range difference measurements remain")
+		}
+		
+		if math.Abs(residual1) < 1.0 && math.Abs(residual2) < 1.0 {
+			fmt.Printf("Converged after %d iterations\n", iter)
+			break
+		}
 		
 		// Solve 2x3 system using pseudo-inverse (least squares)
 		// J * delta = -residuals
-		// Use simplified 2-equation solver
+		// Use simplified 2-equation solver with improved conditioning
 		det := J11*J22 - J12*J21
-		if math.Abs(det) < 1e-10 {
-			return 0, 0, 0, fmt.Errorf("singular Jacobian matrix at iteration %d", iter)
+		
+		fmt.Printf("Iteration %d: det=%.2e, residuals=[%.1f, %.1f]\n", iter, det, residual1, residual2)
+		
+		var stepDx, stepDy float64
+		
+		if math.Abs(det) < 1e-12 {
+			fmt.Printf("Singular matrix detected (det=%.2e) - trying alternative approach\n", det)
+			
+			// Try single-equation approach if determinant is too small
+			// Use the equation with better conditioning
+			if math.Abs(J11) > math.Abs(J21) && math.Abs(J12) > 1e-10 {
+				// Use first equation: J11*dx + J12*dy = -residual1
+				stepDx = -residual1 / J11
+				stepDy = 0.0
+				fmt.Printf("Using single equation approach (equation 1)\n")
+			} else if math.Abs(J21) > 1e-10 {
+				// Use second equation: J21*dx + J22*dy = -residual2  
+				stepDx = -residual2 / J21
+				stepDy = 0.0
+				fmt.Printf("Using single equation approach (equation 2)\n")
+			} else {
+				return 0, 0, 0, fmt.Errorf("singular Jacobian matrix at iteration %d (det=%.2e)", iter, det)
+			}
+			
+			// Apply very small step
+			stepSize := 0.1
+			x.X += stepSize * stepDx
+			x.Y += stepSize * stepDy
+			
+		} else {
+			// Normal case - solve full system
+			stepDx = (-residual1*J22 + residual2*J12) / det
+			stepDy = (residual1*J21 - residual2*J11) / det
+			
+			// Limit step size to prevent divergence
+			maxStep := 1000.0 // Maximum 1km step
+			stepMagnitude := math.Sqrt(stepDx*stepDx + stepDy*stepDy)
+			stepSize := 0.7 // Base damping factor
+			
+			if stepMagnitude > maxStep {
+				stepSize *= maxStep / stepMagnitude
+				fmt.Printf("Large step detected (%.1fm) - limiting to %.1fm\n", stepMagnitude, maxStep*stepSize)
+			}
+			
+			// Update position
+			x.X += stepSize * stepDx
+			x.Y += stepSize * stepDy
 		}
-		
-		// Solve for dx, dy (ignore dz for now - assume flat earth approximation)
-		dx := (-residual1*J22 + residual2*J12) / det
-		dy := (residual1*J21 - residual2*J11) / det
-		dz := 0.0 // Simplified - keep elevation constant
-		
-		// Update position
-		stepSize := 0.5  // Damped Newton step
-		x.X += stepSize * dx
-		x.Y += stepSize * dy
-		x.Z += stepSize * dz
 		
 		if iter == 9 {
 			fmt.Printf("Maximum iterations reached\n")
