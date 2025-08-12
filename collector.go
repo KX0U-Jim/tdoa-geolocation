@@ -82,7 +82,7 @@ func main() {
 	// Constants for sample collection
 	const sampleRate = 2000000 // 2 Msps
 	const bytesPerSample = 2   // I + Q bytes
-	const switchInterval = 2   // seconds per frequency
+	const switchInterval = 10  // seconds per frequency (increased from 2 for contamination dilution)
 	
 	// Calculate total samples needed
 	totalSamples := sampleRate * (*duration)
