@@ -629,8 +629,8 @@ func (p *TDOAProcessor) crossCorrelate(signal1, signal2 []complex64) (int, float
 	processed1 := p.preprocessSignal(signal1, "Signal 1")
 	processed2 := p.preprocessSignal(signal2, "Signal 2")
 	
-	// With longer integration, we can afford to search larger delays  
-	maxLag := 20000 // 10ms at 2 Msps - wider search for weak signals
+	// With 10-second blocks, search much wider range for timing differences
+	maxLag := 200000 // 100ms at 2 Msps - wide search for GPS sync issues
 	
 	fmt.Println("\n--- Time Domain Correlation ---")
 	timeDomainDelay, timeDomainCorr := p.timeDomainCorrelation(processed1, processed2, maxLag)
@@ -767,9 +767,9 @@ func (p *TDOAProcessor) ProcessTDOA(datFiles []string) error {
 		refSig := p.extractReferenceSignal(data)
 		targetSig := p.extractTargetSignal(data)
 		
-		// Use longer integration time for coherent processing gain
-		// 10 ms integration = +10 dB gain, 100 ms = +20 dB gain  
-		testChunkSize := 2000000 // 1 second at 2 Msps - should give +30 dB processing gain
+		// Use much longer integration time for maximum processing gain
+		// With 10-second blocks, use 5-10 seconds for correlation
+		testChunkSize := 10000000 // 5 seconds at 2 Msps - should give +37 dB processing gain
 		if len(refSig) > testChunkSize {
 			refSig = refSig[:testChunkSize]
 			fmt.Printf("Using test chunk: %d samples (%.1f ms)\n", testChunkSize, float64(testChunkSize)/2e6*1000)
@@ -780,7 +780,7 @@ func (p *TDOAProcessor) ProcessTDOA(datFiles []string) error {
 		}
 		
 		fmt.Printf("Coherent integration time: %.0f ms (expecting ~%.1f dB processing gain)\n", 
-			float64(testChunkSize)/2e6*1000, 10*math.Log10(float64(testChunkSize)/100000))
+			float64(testChunkSize)/2e6*1000, 10*math.Log10(float64(testChunkSize)/200000))
 
 		collectorData = append(collectorData, struct {
 			Station Station
