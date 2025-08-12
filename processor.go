@@ -629,8 +629,8 @@ func (p *TDOAProcessor) crossCorrelate(signal1, signal2 []complex64) (int, float
 	processed1 := p.preprocessSignal(signal1, "Signal 1")
 	processed2 := p.preprocessSignal(signal2, "Signal 2")
 	
-	// With 10-second blocks, search much wider range for timing differences
-	maxLag := 200000 // 100ms at 2 Msps - wide search for GPS sync issues
+	// Reasonable search range - start small and optimize
+	maxLag := 2000 // 1ms at 2 Msps - reasonable for local baselines
 	
 	fmt.Println("\n--- Time Domain Correlation ---")
 	timeDomainDelay, timeDomainCorr := p.timeDomainCorrelation(processed1, processed2, maxLag)
@@ -684,8 +684,8 @@ func (p *TDOAProcessor) timeDomainCorrelation(signal1, signal2 []complex64, maxL
 	bestCorr := 0.0
 	
 	// Coherent integration for processing gain
-	// Use block averaging to improve SNR
-	blockSize := 1000 // Average over 1000-sample blocks for coherent gain
+	// Use larger blocks for efficiency, but not too large
+	blockSize := 10000 // Average over 10000-sample blocks for balance of gain and speed
 	
 	fmt.Printf("Using coherent integration with %d-sample blocks\n", blockSize)
 	
@@ -773,9 +773,9 @@ func (p *TDOAProcessor) ProcessTDOA(datFiles []string) error {
 		refSig := p.extractReferenceSignal(data)
 		targetSig := p.extractTargetSignal(data)
 		
-		// Use much longer integration time for maximum processing gain
-		// With 10-second blocks, use 5-10 seconds for correlation
-		testChunkSize := 10000000 // 5 seconds at 2 Msps - should give +37 dB processing gain
+		// Use reasonable chunk size for correlation - too big causes computational explosion
+		// Balance between processing gain and computational complexity
+		testChunkSize := 1000000 // 0.5 seconds at 2 Msps - manageable computation
 		if len(refSig) > testChunkSize {
 			refSig = refSig[:testChunkSize]
 			fmt.Printf("Using test chunk: %d samples (%.1f ms)\n", testChunkSize, float64(testChunkSize)/2e6*1000)
@@ -786,7 +786,7 @@ func (p *TDOAProcessor) ProcessTDOA(datFiles []string) error {
 		}
 		
 		fmt.Printf("Coherent integration time: %.0f ms (expecting ~%.1f dB processing gain)\n", 
-			float64(testChunkSize)/2e6*1000, 10*math.Log10(float64(testChunkSize)/200000))
+			float64(testChunkSize)/2e6*1000, 10*math.Log10(float64(testChunkSize)/100000))
 
 		collectorData = append(collectorData, struct {
 			Station Station
