@@ -120,38 +120,18 @@ static void rtlsdr_callback(unsigned char *buf, uint32_t len, void *ctx)
 			
 			/* Switch to frequency 2 at start of block 2 */
 			if (block_start < bytes_to_read_per_freq && block_end > bytes_to_read_per_freq) {
-				/* Complete hardware reset before frequency change */
-				rtlsdr_reset_buffer(dev);
-				usleep(10000); /* 10ms settling time for PLL */
-				
-				/* Reconfigure everything from scratch */
 				rtlsdr_set_agc_mode(dev, 0);
-				rtlsdr_set_tuner_gain_mode(dev, 1);
 				verbose_gain_set(dev, nearest_gain(dev, gain2_required));
 				verbose_set_frequency(dev, frequency2);
-				usleep(5000); /* PLL settling after frequency change */
 				verbose_gain_set(dev, nearest_gain(dev, gain2_required));
-				
-				/* Final buffer reset to clear switching artifacts */
-				rtlsdr_reset_buffer(dev);
 			}
 			
 			/* Switch back to frequency 1 at start of block 3 */
 			if (block_start < bytes_to_read_per_freq*2 && block_end > bytes_to_read_per_freq*2) {
-				/* Complete hardware reset before frequency change */
-				rtlsdr_reset_buffer(dev);
-				usleep(10000); /* 10ms settling time for PLL */
-				
-				/* Reconfigure everything from scratch */
 				rtlsdr_set_agc_mode(dev, 0);
-				rtlsdr_set_tuner_gain_mode(dev, 1);
 				verbose_gain_set(dev, nearest_gain(dev, gain1_required));
 				verbose_set_frequency(dev, frequency1);
-				usleep(5000); /* PLL settling after frequency change */
 				verbose_gain_set(dev, nearest_gain(dev, gain1_required));
-				
-				/* Final buffer reset to clear switching artifacts */
-				rtlsdr_reset_buffer(dev);
 			}
 
 			samples_collected += len;
