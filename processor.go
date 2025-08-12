@@ -855,13 +855,33 @@ func (p *TDOAProcessor) ProcessTDOA(datFiles []string) error {
 		}
 	}
 	
-	// Use the target signal differences for now (stronger signal)
-	timeDifferences := targetTimeDifferences
+	fmt.Printf("\n=== REFERENCE SIGNAL SYNCHRONIZATION ===\n")
+	fmt.Printf("Using reference signal to synchronize collector timing...\n")
+	
+	// Calculate timing offsets from reference signal correlations
+	refTimingOffsets := make([]float64, len(refTimeDifferences))
+	for i, refDelay := range refTimeDifferences {
+		refTimingOffsets[i] = refDelay
+		fmt.Printf("Reference timing offset %d: %.3f μs\n", i, refDelay*1e6)
+	}
+	
+	fmt.Printf("\n=== APPLYING TIMING CORRECTIONS TO TARGET SIGNAL ===\n")
+	
+	// Apply reference signal timing corrections to target signal delays
+	correctedTargetDelays := make([]float64, len(targetTimeDifferences))
+	for i := 0; i < len(targetTimeDifferences); i++ {
+		correctedTargetDelays[i] = targetTimeDifferences[i] - refTimingOffsets[i]
+		fmt.Printf("Target delay %d: %.3f μs (raw) - %.3f μs (ref offset) = %.3f μs (corrected)\n", 
+			i, targetTimeDifferences[i]*1e6, refTimingOffsets[i]*1e6, correctedTargetDelays[i]*1e6)
+	}
 	
 	fmt.Printf("\n=== CORRELATION COMPARISON ===\n")
-	fmt.Printf("Reference signal (162.4 MHz): Generally weaker correlation\n")
-	fmt.Printf("Target signal (92.3 MHz): Should show stronger correlation\n")
-	fmt.Printf("Using target signal for TDOA calculation\n")
+	fmt.Printf("Reference signal (162.4 MHz): Used for timing synchronization\n")
+	fmt.Printf("Target signal (92.3 MHz): Corrected with reference timing offsets\n")
+	fmt.Printf("Using corrected target signal for TDOA calculation\n")
+	
+	// Use the corrected target signal differences 
+	timeDifferences := correctedTargetDelays
 
 	// TDOA triangulation (basic implementation)
 	fmt.Println("\nTDOA triangulation:")
@@ -871,17 +891,16 @@ func (p *TDOAProcessor) ProcessTDOA(datFiles []string) error {
 		return nil
 	}
 	
-	// For now, let's see what happens with the measured (zero) time differences
-	fmt.Printf("Time differences: %.3f μs, %.3f μs, %.3f μs\n", 
+	fmt.Printf("Corrected time differences: %.3f μs, %.3f μs, %.3f μs\n", 
 		timeDifferences[0]*1e6, timeDifferences[1]*1e6, timeDifferences[2]*1e6)
 	
-	// Convert time differences to distance differences
+	// Convert corrected time differences to distance differences
 	c := 299792458.0 // Speed of light (m/s)
-	distDiff1 := timeDifferences[0] * c // kx0u-n3pay
-	distDiff2 := timeDifferences[1] * c // kx0u-kf0mtl  
-	distDiff3 := timeDifferences[2] * c // n3pay-kf0mtl
+	distDiff1 := timeDifferences[0] * c
+	distDiff2 := timeDifferences[1] * c  
+	distDiff3 := timeDifferences[2] * c
 	
-	fmt.Printf("Distance differences: %.1f m, %.1f m, %.1f m\n", 
+	fmt.Printf("Corrected distance differences: %.1f m, %.1f m, %.1f m\n", 
 		distDiff1, distDiff2, distDiff3)
 	
 	// Simple diagnostic: what if we had some example time delays?
@@ -897,19 +916,19 @@ func (p *TDOAProcessor) ProcessTDOA(datFiles []string) error {
 	// Calculate TDOA position using target signal time differences
 	fmt.Println("\n=== TDOA GEOLOCATION ===")
 	
-	if len(targetTimeDifferences) < 3 {
-		return fmt.Errorf("need at least 3 time differences for TDOA, got %d", len(targetTimeDifferences))
+	if len(timeDifferences) < 3 {
+		return fmt.Errorf("need at least 3 time differences for TDOA, got %d", len(timeDifferences))
 	}
 	
-	// Convert time differences to range differences (multiply by speed of light)
+	// Convert corrected time differences to range differences (multiply by speed of light)
 	const speedOfLight = 299792458.0 // Speed of light (m/s)
-	rangeDifferences := make([]float64, len(targetTimeDifferences))
-	for i, td := range targetTimeDifferences {
+	rangeDifferences := make([]float64, len(timeDifferences))
+	for i, td := range timeDifferences {
 		rangeDifferences[i] = td * speedOfLight
 	}
 	
 	fmt.Printf("Time differences (μs): ")
-	for _, td := range targetTimeDifferences {
+	for _, td := range timeDifferences {
 		fmt.Printf("%.3f ", td*1e6)
 	}
 	fmt.Println()
