@@ -664,12 +664,18 @@ func (p *TDOAProcessor) timeDomainCorrelation(signal1, signal2 []complex64, maxL
 		return 0, 0.0
 	}
 	
-	// Limit search range
+	// For equal-length signals, use shorter template to allow delay search
+	if templateLen == signalLen {
+		templateLen = templateLen - maxLag  // Make room for time shifts
+		fmt.Printf("Reduced template to %d samples to allow %d sample delay search\n", templateLen, maxLag)
+	}
+	
+	// Limit search range to what's actually possible
 	if maxLag > signalLen-templateLen {
 		maxLag = signalLen - templateLen
 	}
 	
-	// Ensure we can at least do zero-delay correlation
+	// Ensure we can search meaningful delays
 	if maxLag < 1 {
 		maxLag = 1
 	}
